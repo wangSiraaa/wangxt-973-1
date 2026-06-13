@@ -29,38 +29,53 @@ export function queryOrders(params = {}) {
   const conditions = [];
   const values = [];
   if (params.phone) {
-    conditions.push('visitor_phone = ?');
+    conditions.push('o.visitor_phone = ?');
     values.push(params.phone);
   }
   if (params.status) {
-    conditions.push('status = ?');
+    conditions.push('o.status = ?');
     values.push(params.status);
   }
+  if (params.statuses) {
+    let arr = params.statuses;
+    if (typeof arr === 'string') {
+      arr = arr.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    if (Array.isArray(arr) && arr.length > 0) {
+      conditions.push(`o.status IN (${arr.map(() => '?').join(',')})`);
+      values.push(...arr);
+    }
+  }
   if (params.lockerId) {
-    conditions.push('locker_id = ?');
+    conditions.push('o.locker_id = ?');
     values.push(params.lockerId);
   }
   if (params.orderNo) {
-    conditions.push('order_no LIKE ?');
+    conditions.push('o.order_no LIKE ?');
     values.push(`%${params.orderNo}%`);
   }
   if (params.isForceClosed) {
-    conditions.push('is_force_closed = 1');
+    conditions.push('o.is_force_closed = 1');
   }
   if (params.startDate) {
-    conditions.push('rent_time >= ?');
+    conditions.push('o.rent_time >= ?');
     values.push(params.startDate);
   }
   if (params.endDate) {
-    conditions.push('rent_time <= ?');
+    conditions.push('o.rent_time <= ?');
     values.push(params.endDate + ' 23:59:59');
   }
+  if (params.refundStatus) {
+    conditions.push('o.refund_status = ?');
+    values.push(params.refundStatus);
+  }
   const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
-  return exec(`
-    SELECT o.*, l.locker_code
+  const sql = `
+    SELECT o.*, l.locker_code, l.zone, l.locker_type, l.size, l.hourly_rate, l.base_deposit
     FROM rental_orders o LEFT JOIN lockers l ON o.locker_id = l.id
     ${where} ORDER BY o.rent_time DESC LIMIT ? OFFSET ?
-  `, [...values, params.limit || 200, params.offset || 0]);
+  `;
+  return exec(sql, [...values, params.limit || 500, params.offset || 0]);
 }
 
 export function getOrderDetail(orderId) {

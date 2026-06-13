@@ -97,7 +97,15 @@ export async function createApp() {
   });
 
   app.get('/api/orders', roleAuth(['admin', 'finance', 'maintenance']), (req, res) => {
-    res.json(query.queryOrders(req.query));
+    const params = { ...req.query };
+    if (params.statuses) {
+      if (typeof params.statuses === 'string') {
+        params.statuses = params.statuses.split(',').map(s => s.trim()).filter(Boolean);
+      } else if (!Array.isArray(params.statuses)) {
+        delete params.statuses;
+      }
+    }
+    res.json(query.queryOrders(params));
   });
 
   app.get('/api/orders/:id', roleAuth(['*']), (req, res) => {

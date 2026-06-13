@@ -7,14 +7,15 @@ function AdminReturn() {
   const [message, setMessage] = useState(null);
 
   const loadOrders = async () => {
-    orderApi.list({ status: 'renting' }).then(setOrders).catch(() => setOrders([]));
-    orderApi.list({ status: 'overtime' }).then(o => setOrders(prev => [...prev, ...o])).catch(() => {});
-    orderApi.list({ status: 'swap_pending' }).then(o => setOrders(prev => [...prev, ...o])).catch(() => {});
+    try {
+      const data = await orderApi.list({ statuses: 'renting,overtime,swap_pending' });
+      setOrders(data || []);
+    } catch (e) {
+      setOrders([]);
+    }
   };
 
   useEffect(() => { loadOrders(); }, []);
-
-  const activeOrders = orders.filter(o => ['renting', 'overtime', 'swap_pending'].includes(o.status));
 
   const handleReturn = async (orderId) => {
     if (!confirm('确认归还该柜子？系统将自动计算超时费用')) return;
@@ -24,9 +25,12 @@ function AdminReturn() {
     }).catch(e => setMessage({ type: 'error', text: e.message }));
   };
 
-  const handleSearch = () => {
-    if (!phone.trim()) {
-      orderApi.visitorActive(phone).then(o => setOrders(o ? [o] : []));
+  const handleSearch = async () => {
+    if (phone.trim()) {
+      try {
+        const o = await orderApi.visitorActive(phone);
+        setOrders(o ? [o] : []);
+      } catch (e) { setOrders([]); }
     } else {
       loadOrders();
     }
@@ -50,7 +54,7 @@ function AdminReturn() {
         <table>
           <thead><tr><th>订单号</th><th>柜号</th><th>手机号</th><th>租赁时间</th><th>押金</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>
-            {activeOrders.length === 0 ? <tr><td colSpan="7" className="empty-state">暂无待归还订单</td></tr> : activeOrders.map(o => (
+            {orders.length === 0 ? <tr><td colSpan="7" className="empty-state">暂无待归还订单</td></tr> : orders.map(o => (
               <tr key={o.id}>
                 <td>{o.order_no}</td><td>{o.locker_code}</td><td>{o.visitor_phone}</td>
                 <td>{o.rent_time}</td><td>¥{o.actual_deposit}</td>
