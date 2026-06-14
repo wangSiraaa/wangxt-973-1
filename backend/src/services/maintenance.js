@@ -166,53 +166,103 @@ export function claimLeftItem(params) {
 }
 
 export function applyForceOpen(params) {
-  const { lockerId, orderId, reason, applicant } = params;
+  const { lockerId, orderId, reason, applicant, applicantRole = 'admin' } = params;
 
   if (!reason || reason.length < 5) throw new Error('请填写开柜原因（至少5字）');
+  if (!applicant) throw new Error('申请人不能为空');
 
-  const approvalId = 'approve_' + Date.now();
+  const locker = getOne('SELECT * FROM lockers WHERE id = ?', [lockerId]);
+  if (!locker) throw new Error('柜子不存在');
+
+  const approvalId = 'approve_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
   run(`
-    INSERT INTO force_open_approvals (id, locker_id, order_id, applicant, reason)
-    VALUES (?, ?, ?, ?, ?)
-  `, [approvalId, lockerId, orderId || null, applicant, reason]);
+    INSERT INTO force_open_approvals (id, locker_id, order_id, applicant, applicant_role, reason)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `, [approvalId, lockerId, orderId || null, applicant, applicantRole, reason]);
 
-  createAudit(applicant, 'admin', 'apply_force_open', {
+  createAudit(applicant, applicantRole, 'apply_force_open', {
     targetType: 'force_open',
     targetId: approvalId,
-    afterData: { lockerId, reason }
+    afterData: { lockerId, lockerCode: locker.locker_code, reason, applicantRole }
   });
 
   return { approvalId, status: 'pending' };
 }
 
+const APPROVAL_ROLES = ['finance'];
+
 export function approveForceOpen(params) {
-  const { approvalId, approved, remark, approver } = params;
+  const { approvalId, approved, remark, approver, approverRole = 'admin' } = params;
+
+  if (!approver) throw new Error('审批人不能为空');
 
   const approval = getOne('SELECT * FROM force_open_approvals WHERE id = ?', [approvalId]);
   if (!approval) throw new Error('审批申请不存在');
-  if (approval.status !== 'pending') throw new Error('该申请已处理');
 
-  run(`
-    UPDATE force_open_approvals SET status = ?, approver = ?, approval_time = ?, approval_remark = ?
-    WHERE id = ?
-  `, [approved ? 'approved' : 'rejected', approver, now(), remark, approvalId]);
-
-  if (approved) {
-    run(`
-      UPDATE lockers SET lock_status = 'unlocked', last_lock_event = 'unlock_by_approval',
-      last_lock_event_time = ?, updated_at = ? WHERE id = ?
-    `, [now(), now(), approval.locker_id]);
-    run(`
-      UPDATE force_open_approvals SET executed = 1, executed_by = ?, executed_at = ? WHERE id = ?
-    `, [approver, now(), approvalId]);
-    syncLockerDerivedStatus(approval.locker_id);
+  if (approval.status !== 'pending') {
+    throw new Error(`该申请已${
+      approval.status === 'approved' ? '通过' :
+      approval.status === 'rejected' ? '驳回' : '处理'
+    }，无法重复审批`);
   }
 
-  createAudit(approver, 'finance', approved ? 'approve_force_open' : 'reject_force_open', {
+  if (!APPROVAL_ROLES.includes(approverRole)) {
+    throw new Error(`当前角色（${approverRole}）无强制开柜审批权限，需财务及以上权限`);
+  }
+
+  if (approval.applicant === approver) {
+    throw new Error('申请人与审批人不能为同一人，禁止自审自批');
+  }
+
+  const tx = transaction(() => {
+    run(`
+      UPDATE force_open_approvals
+      SET status = ?, approver = ?, approver_role = ?, approval_time = ?, approval_remark = ?
+      WHERE id = ?
+    `, [
+      approved ? 'approved' : 'rejected',
+      approver,
+      approverRole,
+      now(),
+      remark || '',
+      approvalId
+    ]);
+
+    if (approved) {
+      run(`
+        UPDATE lockers
+        SET lock_status = 'unlocked',
+            last_lock_event = 'unlock_by_approval',
+            last_lock_event_time = ?,
+            updated_at = ?
+        WHERE id = ?
+      `, [now(), now(), approval.locker_id]);
+
+      run(`
+        UPDATE force_open_approvals
+        SET executed = 1, executed_by = ?, executed_at = ?
+        WHERE id = ?
+      `, [approver, now(), approvalId]);
+
+      syncLockerDerivedStatus(approval.locker_id);
+    }
+  });
+  tx();
+
+  createAudit(approver, approverRole, approved ? 'approve_force_open' : 'reject_force_open', {
     targetType: 'force_open',
     targetId: approvalId,
-    afterData: { approved, remark }
+    beforeData: { status: 'pending', applicant: approval.applicant, reason: approval.reason },
+    afterData: { approved, remark, executed: approved ? 1 : 0 }
   });
 
-  return { approvalId, status: approved ? 'approved' : 'rejected' };
+  if (approved) {
+    createAudit(approver, approverRole, 'execute_force_open', {
+      targetType: 'locker',
+      targetId: approval.locker_id,
+      afterData: { approvalId, lockStatus: 'unlocked' }
+    });
+  }
+
+  return { approvalId, status: approved ? 'approved' : 'rejected', executed: approved ? 1 : 0 };
 }

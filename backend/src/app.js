@@ -274,11 +274,12 @@ export async function createApp() {
     }
   });
 
-  app.post('/api/force-open/apply', roleAuth(['admin']), (req, res) => {
+  app.post('/api/force-open/apply', roleAuth(['admin', 'maintenance']), (req, res) => {
     try {
       const result = maintenance.applyForceOpen({
         ...req.body,
-        applicant: req.userPhone
+        applicant: req.userPhone,
+        applicantRole: req.userRole
       });
       res.json({ success: true, data: result });
     } catch (e) {
@@ -286,19 +287,20 @@ export async function createApp() {
     }
   });
 
-  app.post('/api/force-open/approve', roleAuth(['finance', 'admin']), (req, res) => {
+  app.post('/api/force-open/approve', roleAuth(['finance']), (req, res) => {
     try {
       const result = maintenance.approveForceOpen({
         ...req.body,
-        approver: req.userPhone
+        approver: req.userPhone,
+        approverRole: req.userRole
       });
       res.json({ success: true, data: result });
     } catch (e) {
-      res.status(400).json({ error: e.message });
+      res.status(403).json({ error: e.message });
     }
   });
 
-  app.get('/api/force-open/approvals', roleAuth(['admin', 'finance']), (req, res) => {
+  app.get('/api/force-open/approvals', roleAuth(['admin', 'finance', 'maintenance']), (req, res) => {
     res.json(query.getForceOpenApprovals(req.query));
   });
 
